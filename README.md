@@ -28,7 +28,7 @@ Currently (Mar 2025) the script supports two parameters
 ### Why DB SAMPLE ?
 I wrote this script to modify the SAMPLE database as this database is [easily creatable](https://www.choudharysumit.com/2021/03/create-sample-database-in-db2.html) by just calling [_db2sampl_](https://www.ibm.com/docs/en/db2/11.5.0?topic=commands-db2sampl-create-sample-database "db2sampl - Create sample database command") from any instance user, but I didn't find something to comfortable modify this database for testing DB2 archive logging and DB2 HADR DB mirroring.
 
-As I cannot imagine, anyone uses SAMPLE for other purposes as testing, this database should be at any time easily dropable to create it again from scratch by the mentioned _db2sampl_ program.
+As I cannot imagine, anyone uses the [SAMPLE database](https://ptgmedia.pearsoncmg.com/images/0672326132/downloads/appa.pdf "APPENDIXES DB2 Sample Tables - pearsoncmg.com") for other purposes as testing, this database should be at any time easily dropable to create it again from scratch by the mentioned _db2sampl_ program.
 
 #### Archive Logging
 As this script first deletes records in tables DEPT and EMPLOYEE, then (without parameter -d) inserts these records again, it creates an amount of archive log data, so after some runs, a new archive log is created.
