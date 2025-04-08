@@ -24,11 +24,17 @@ Currently (Mar 2025) the script supports two parameters
 - -h : show some help of usage and parameters
 - -d : only delete formerly inserted records, do not insert new ones.
 
-### Intention
+## Intention
+### Why DB SAMPLE ?
 I wrote this script to modify the SAMPLE database as this database is easily creatable by just calling _db2sampl_ from any instance user, but I didn't find something to comfortable modify this database for testing DB2 archive logging and DB2 HADR DB mirroring.
+
+As I cannot imagine, anyone uses SAMPLE for other purposes as testing, this database should be at any time easily dropable to create it again from scratch by the mentioned _db2sampl_ program.
 
 #### Archive Logging
 As this script first deletes records in tables DEPT and EMPLOYEE, then (without parameter -d) inserts these records again, it creates an amount of archive log data, so after some runs, a new archive log is created.
 
 #### HADR Database Mirroring
 In a DB2 HADR DB mirroring environment, possible even in the free DB2 community edition, DB2 ships the modified data to the standby database. So I could do tests whether both databases - primary and standby - are consistent, rollback tests, takeover tests a.s.o. and check the results as the records contain a unique reference timestamp that is taken inside the script at start.
+
+#### GITHUB experience
+Finally and beyond the scope of DB2 or bash scripting, by writing this readme, I become familiar with github markup language - killing two birds with one stone.
