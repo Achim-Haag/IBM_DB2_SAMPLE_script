@@ -18,16 +18,19 @@
 # - bash 4.4.20(1)-release
 # - DB2 v11.5.9.0 (Community Edition)
 # 
-# 07.04.25/Hga - Script created
-# 08.04.25/Hga - Calling options (getopts) instead of read while executing
+# 07.04.25/AH - Script created
+# 08.04.25/AH - Calling options (getopts) instead of read while executing
+# 10.05.25/AH - Versioning; error handling for DB2 CLI commands
 
 ###########################################
 # Init
 ###########################################
 clear
-dbname="SAMPLE"
-dbtabdept="DEPT"
-dbtabempl="EMPLOYEE"
+version="1.1 of 04.10.25,10:49"
+db2systab="SYSIBM.SYSTABLES"	# DB2 system catalog table
+dbname="SAMPLE"			# Database created by db2sampl program
+dbtabdept="DEPT"		# DEPARTMENT table (DEPT is alias)
+dbtabempl="EMP"			# EMPLOYEE table (EMP is alias)
 #
 reftime="$(date +"%T")"		# Use actual time as reference through whole script
 refdate="$(date -Idate)"	# Use actual time as reference through whole script
@@ -41,24 +44,29 @@ stepctr=0			# Just for display
 ###########################################
 #  Process parameter
 ###########################################
+let stepctr=stepctr+1
+echo -e "\n### Step ${stepctr} - Process user parameter if specified"
 #
 NOINSERTFLAG=false
 #
 while getopts "hd" optchar; do
   case $optchar in
-  h) echo "Add records to IBM database SAMPLE (created by IBM program 'db2sampl')"
+  h) echo "$(basename $0) Version $version"
+     echo " "
+     echo "Add records to IBM database SAMPLE (created by IBM program 'db2sampl')"
      echo "This script processes tables DEPT (DEPARTMENT) and EMP (EMPLOYEE)"
      echo "This script removes formerly added records, then inserts new records in these tables"
      echo "As of DB2 11.5, no records created by 'db2sampl' should be touched"
      echo " "
      echo "Parameters:"
-     echo -e "  -h\t\tthis help text"
+     echo -e "  -h\t\tonly this help text, no processing"
      echo -e "  -d\t\tonly delete, no insert"
      echo " "
      echo "Developed under"
      echo "- RHEL 8.10"
      echo "- bash 4.4.20(1)-release"
      echo "- DB2 v11.5.9.0 (Community Edition)"
+     echo " "
      exit 1
   ;;
   d) NOINSERTFLAG=true
@@ -79,11 +87,22 @@ sleep 3		# just to read above message
 #  Init DB Connection
 ###########################################
 let stepctr=stepctr+1
-echo -e "\n### Step ${stepctr} - Remove previously inserted records"
+echo -e "\n### Step ${stepctr} - Initialize DB connection at $refdate $reftime"
 db2 "connect to $dbname"
 dbcorc=$?
 if [[ $dbcorc -ne 0 ]] ; then
-  echo "Error $dbcorc von [db2 connect to $dbname]"
+  echo "Error $dbcorc from [db2 connect to $dbname]"
+  exit 8
+fi 
+
+#################################################
+#  Show used aliases and tabnames (just for fun) 
+#################################################
+echo "--- Databases we need (from $db2systab) ---"
+db2  "SELECT SUBSTR(CREATOR,1,15) as Creator, SUBSTR(NAME,1,10) as Alias, SUBSTR(BASE_NAME,1,20) as Table FROM ${db2systab} \
+	where TYPE='A' AND NAME IN ('${dbtabdept}', '${dbtabempl}')"
+if [[ $dbclirc -ne 0 ]] ; then
+  echo "Error $dbclirc from [db2 SELECT ... FROM ${db2systab}  where TYPE='A' AND NAME IN ('${dbtabdept}', '${dbtabempl}'"
   exit 8
 fi 
 
@@ -93,7 +112,7 @@ fi
 let stepctr=stepctr+1
 echo -e "\n### Step ${stepctr} - Remove previously inserted records"
 #
-echo "--- Remove departments X, Y, Z from table $dbtabdept"
+echo "--- Remove departments X, Y, Z from table $dbtabdept ---"
 #
 numrecs=$(db2 -x "select count(*) from ${dbtabdept} where DEPTNO like 'Z%'")
 let numrecs=numrecs+0				# Left align
@@ -110,22 +129,28 @@ let numrecs=numrecs+0				# Left align
 echo "delete from $dbtabdept where DEPTNO like 'X%' ($numrecs recs)"
 db2  "delete from $dbtabdept where DEPTNO like 'X%'"
 #
-echo "--- Remove employes with job "@..." from table $dbtabempl"
+echo "--- Remove employes with job "@..." from table $dbtabempl ---"
 numrecs=$(db2 -x "select count(*) from ${dbtabempl} where JOB like '@%'")
 let numrecs=numrecs+0				# Left align
 echo "delete from $dbtabempl where JOB like '@%' ($numrecs recs)"
 db2  "delete from $dbtabempl where JOB like '@%'"
 #
 echo "--- Commiting deletions ---"
-db2 commit work
+db2 "commit work"
+dbclirc=$?
+if [[ $dbclirc -ne 0 ]] ; then
+  echo "Error $dbclirc from [db2 commit work]"
+  db2 "rollback"
+  exit 8
+fi 
 
 ### read -p "Continue with inserts into tab $dbtabdept [y/n] ? " answer
 ### if [[ $answer = "n" || $answer = "N" ]] ; then
 ###  echo "So I stop after step ${stepctr}..."
 if [[ $NOINSERTFLAG = true ]] ; then		# driven by option
-  echo "Stop by user option after step ${stepctr}, no inserts..."
+  echo "--- Stop by user option after step ${stepctr}, no inserts ---"
   db2 terminate
-  exit
+  exit 0
 fi
 ###########################################
 #  Insert departments X, Y, Z, 01...99 
@@ -151,25 +176,47 @@ for deptprefix in "X" "Y" "Z" ; do
     let lvl1ctr=lvl1ctr+1
     deptnrlz="${deptprefix}$(printf '%02d\n' "$deptnr")"
 # About 20% of new departments get a manager (EMPNO from EMPLOYEE table)
+# Hint on arithm.expr.: ((...)) returns true/false, $((...)) returns value of operation
+    randmanager="default"
     if (($RANDOM % 20 == 0)) ; then
-      randemployee="'$(db2 -x "select empno from $dbtabempl order by rand() limit 1")'"
-    else
-      randemployee="default"
+      randmanager="'$(db2 -x "select empno from $dbtabempl order by rand() limit 1")'"
+      dbclirc=$?
+      if [[ $dbclirc -ne 0 ]] ; then
+        echo "Error $dbclirc from [db2 select empno from $dbtabempl order by rand() limit 1]"	# only show error, no exit
+        randmanager="default"
+      fi 
     fi
 #
     let deptctr=deptctr+1
     deptctrlz="$(printf '%03d\n' "$deptctr")"
-    if (($deptctr % 10 == 0 ))  ; then	# Hint on arithm.expr.: ((...)) returns true/false, $((...)) returns value of operation
-      echo "Insert Record ${deptctrlz} [$deptnrlz] with upper [${upperdept}00] and manager [$randemployee]"
+    if [[ $randmanager != "default" ]] ; then	# print all departments with non-default manager (just to have a little output)
+      echo "Insert Record ${deptctrlz} [$deptnrlz] with upper [${upperdept}00] and manager [$randmanager]"
     fi
-    db2 "insert into $dbtabdept (DEPTNO, DEPTNAME, ADMRDEPT, MGRNO) VALUES('${deptnrlz}','AH-${deptctrlz} ${insertdate} ${deptnrlz}->${upperdept}00','${upperdept}00',$randemployee)"
+#
+    db2 "insert into $dbtabdept (DEPTNO, DEPTNAME, ADMRDEPT, MGRNO) \
+	VALUES('${deptnrlz}','AH-${deptctrlz} ${insertdate} ${deptnrlz}->${upperdept}00','${upperdept}00',$randmanager)"
+    dbclirc=$?
+    if [[ $dbclirc -ne 0 ]] ; then
+      echo "Error $dbclirc from [db2 insert into $dbtabdept (DEPTNO, DEPTNAME, ADMRDEPT, MGRNO) VALUES( ...]"	# only show error, no exit
+    fi 
+#
   done
   upperdept=$deptprefix			# backlink for Y... is previous X (00), for Z... is previous Y (00)
 done
-echo "Commiting work..."
-db2 commit work				# commit inserted department records
+echo "--- Commiting work ---"
+db2 "commit work"				# commit inserted department records
+dbclirc=$?
+if [[ $dbclirc -ne 0 ]] ; then
+  echo "Error $dbclirc from [db2 commit work ]"
+  db2 rollback			# Rollback work
+  exit 8
+fi 
 echo "= = = = = = = = = Table $dbtabdept = = = = = = = = = ="
 db2 "select * from $dbtabdept order by DEPTNO"		# show the results
+dbclirc=$?
+if [[ $dbclirc -ne 0 ]] ; then
+  echo "Error $dbclirc from [db2 select * from $dbtabdept order by DEPTNO]"	# only show error, no exit
+fi 
 echo "= = = = = = = = = = = = = = = = = = = = = = = = = = ="
 
 
@@ -226,10 +273,15 @@ while [[ $emplno -lt $emplmx ]] ; do
   while [[ $namesequal -gt 0 ]] ; do	# while lastname + unused firstname found
 # Check DB for lastname + actual firstname already in table
     namesequal=$(db2 -x "select count(*) from $dbtabempl where lastname = '${empllnme}' and firstnme = '${emplfnme}'")
+    dbclirc=$?
+    if [[ $dbclirc -ne 0 ]] ; then
+      echo "Error $dbclirc from [db2 select count(*) from $dbtabempl where lastname = '${empllnme}' and firstnme = '${emplfnme}']"	# only show error, no exit
+      let namesequal=0		# Assume no records found, so try insert
+    fi 
+#
     if [[ $namesequal -lt 1 ]] ; then	# if lastname + firstname combination are not in DB
       break				# then we've found unique combo: no further action required, end loop
     fi
-    echo "* Employee $emplno name exists: ${empllnme} ${emplfnme} ($emplfgen), trying next firstname"
 # Wrap index to firstname array if higher than last element
     if [[ $nextfnme -lt $frstnmax ]] ; then	# if we are below the highest element in firstname array
       let nextfnme=nextfnme+1		# address next element in firstname array
@@ -240,19 +292,26 @@ while [[ $emplno -lt $emplmx ]] ; do
     if [[ $nextfnme -eq $randfnme ]] ; then	# we reached the firstname element where we started
       emplfnme="${frstnarr[$randfnme]}"	# use firstname element of while-loop entry
       emplfgen="${frstxarr[$randfnme]}" # use gender element of while-loop entry
-      echo "* Employee $emplno name in db:  ${empllnme} ${emplfnme} ($emplfgen) but no other firstname possible"
+      echo "- Employee $emplno name in db:  ${empllnme} ${emplfnme} ($emplfgen) but no other firstname possible"
       break				# then we've no more firstname elements to compare: no further action, end loop
     fi
 #
+    echo "- Employee $emplno name exists: ${empllnme} ${emplfnme} ($emplfgen), trying next firstname ${frstnarr[$nextfnme]}"
     emplfnme="${frstnarr[$nextfnme]}"	# get next firstname element
     emplfgen="${frstxarr[$nextfnme]}"	# get next gender element
-    echo "* Employee $emplno checking db: ${empllnme} ${emplfnme} ($emplfgen)"
   done 
 #
   randmidi=$(($RANDOM % $midilen))	# e.g. 26 chars + 25 spaces = 51 chars; random mod 51 = 0...50 = A...Z and spaces between
   midichar="${midinit:$randmidi:1}"	# Pick character or space for midname initial
 #
   empldept="$(db2 -x "select DEPTNO from $dbtabdept where DEPTNO like 'X%' or DEPTNO like 'Y%' or DEPTNO like 'Z%' order by RAND() limit 1")"
+  dbclirc=$?
+  if [[ $dbclirc -ne 0 ]] ; then
+    echo "Error $dbclirc from [db2 select DEPTNO from $dbtabdept where DEPTNO like 'X%' or DEPTNO like 'Y%' or DEPTNO like 'Z%' order by RAND() limit 1']"	# only show error, no exit
+    empldept="X00"		# Use default department
+  fi 
+  [[ $midichar != " " ]] && echotext=",mid init:${midichar}" || echotext=""
+  echo "* Employee $emplno created with ${empllnme} ${emplfnme} (gender:${emplfgen}${echotext})"
 #
   emplphon=$(($RANDOM % 1000))		# last three numbers of phone are random,
   emplphon="9$(printf '%03d\n' "$emplphon")"	# with leading zeroes and preceeded by "9"
@@ -277,15 +336,27 @@ while [[ $emplno -lt $emplmx ]] ; do
 # echo for debugging, db2 for database insert
 #
 ###  echo "$emplno Name: $emplfnme $midichar $empllnme Dept: $empldept Phone: $emplphon Job: $jobname Gender: $emplfgen Hiredate: $hiredate Birthdate: $birthdate Salary: $salary Bonus: $bonus Commission: $commission"
-  db2 "insert into $dbtabempl (EMPNO, FIRSTNME, MIDINIT, LASTNAME, WORKDEPT, PHONENO, HIREDATE, JOB, EDLEVEL, SEX, BIRTHDATE, SALARY, BONUS, COMM) \
-       VALUES('${emplno}','${emplfnme}','${midichar}','${empllnme}','${empldept}',$emplphon,'${hiredate}','${jobname}',$edlevel,'$emplfgen','${birthdate}',$salary,$bonus,$commission)"
+  db2 "insert into $dbtabempl (EMPNO, FIRSTNME, MIDINIT, LASTNAME, WORKDEPT, PHONENO, HIREDATE, \
+	JOB, EDLEVEL, SEX, BIRTHDATE, SALARY, BONUS, COMM) \
+	VALUES('${emplno}','${emplfnme}','${midichar}','${empllnme}','${empldept}',$emplphon,'${hiredate}', \
+	'${jobname}',$edlevel,'${emplfgen}','${birthdate}',$salary,$bonus,$commission)"
+  dbclirc=$?
+  if [[ $dbclirc -ne 0 ]] ; then
+    echo "Error $dbclirc from [db2 insert into $dbtabempl (EMPNO, FIRSTNME, MIDINIT, LASTNAME, WORKDEPT, ...']"	# only show error, no exit
+  fi 
 done
-echo "Commiting work..."
+echo "--- Commiting work ---"
 db2 commit work				# commit inserted employee records
+dbclirc=$?
+if [[ $dbclirc -ne 0 ]] ; then
+  echo "Error $dbclirc from [db2 commit work ]"
+  db2 rollback			# Rollback work
+  exit 8
+fi 
 echo "= = = = = = = = = Table $dbtabempl= = = = = = = = = ="
 db2 "select * from $dbtabempl order by EMPNO"		# show the results
 echo "= = = = = = = = = = = = = = = = = = = = = = = = = = ="
-echo "Only added records: ref date (month/day) in BIRTHDATE, ref time in COMM !"
+echo "Only added records: ref date ${refdate:5:5} (month/day) in BIRTHDATE, ref time $commtime in COMM !"
 #
 # Exit program
 #
